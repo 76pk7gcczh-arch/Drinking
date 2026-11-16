@@ -222,6 +222,21 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
 }
 .primary:disabled { opacity: .4; }
 
+.alert {
+  border-radius: 14px; padding: 12px 14px; font-weight: 600; font-size: 15px;
+  background: color-mix(in srgb, var(--l5) 16%, var(--surface)); border: 1px solid var(--l5);
+}
+.ahead { margin: 0; font-size: 14px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--lvl) 30%, var(--line)); }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.stack h2 { margin: 0; }
+.wi { list-style: none; margin: 0; padding: 0; }
+.wi li { display: grid; grid-template-columns: 2.4em 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.wi .n { font: 700 17px/1.4 var(--display); color: var(--muted); }
+.wi b { font: 700 18px/1.3 var(--display); color: var(--lvl); font-variant-numeric: tabular-nums; }
+.wi .tag { font-size: 13px; font-weight: 600; color: var(--lvl); margin-left: 6px; }
+.wi p { margin: 1px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wi p em { font-style: normal; font-weight: 600; color: var(--l5); }
+.preview.over { color: var(--l5); font-weight: 600; }
 .toast {
   position: fixed; z-index: 30; left: 50%; transform: translateX(-50%);
   bottom: calc(18px + env(safe-area-inset-bottom, 0px));
@@ -251,12 +266,15 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
     <b>Set your weight and sex.</b> The estimate uses 80 kg, male until you do.
   </button>
 
+  <div class="alert" id="alert" role="status" hidden></div>
+
   <section class="hero" id="hero" aria-live="off">
     <div class="hero-top"><span class="pill" id="lvlName">Sober</span><span class="trend" id="trend"></span></div>
     <div class="reading"><span class="num" id="bac">0.00</span><span class="unit" id="unit">‰</span></div>
     <div class="scale" id="scale" aria-hidden="true"></div>
     <p class="effects" id="effects"></p>
     <p class="warn" id="warn" hidden></p>
+    <p class="ahead" id="ahead" hidden></p>
   </section>
 
   <dl class="stats">
@@ -269,6 +287,14 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   <section>
     <h2>Add a drink</h2>
     <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="stack">
+    <h2>If you keep drinking</h2>
+    <div class="field"><span class="lbl">Drink</span><div class="seg" id="wiType"></div></div>
+    <div class="field"><span class="lbl">One every</span><div class="seg" id="wiPace"></div></div>
+    <ul class="wi" id="wi"></ul>
+    <p class="sub" id="wiNote"></p>
   </section>
 
   <section>
@@ -326,11 +352,13 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       <div class="field"><span class="lbl">Sex</span><div class="seg" id="segSex"></div></div>
       <div class="field"><label for="kg">Weight, kg</label><input type="text" inputmode="decimal" id="kg" autocomplete="off"></div>
     </div>
-    <div class="field"><span class="lbl">Food in your stomach</span><div class="seg" id="segFood"></div></div>
+    <div class="field"><span class="lbl">What you have eaten</span><div class="seg" id="segFood"></div></div>
+    <p class="preview" id="foodNote"></p>
+    <div class="field"><span class="lbl">Warn me before I reach</span><div class="seg" id="segWarn"></div></div>
     <div class="field"><span class="lbl">How fast you burn alcohol, ‰ per hour</span><div class="seg" id="segRate"></div></div>
     <div class="field"><span class="lbl">Show values as</span><div class="seg" id="segUnit"></div></div>
     <div class="field"><span class="lbl">Legal limit line</span><div class="seg" id="segLimit"></div></div>
-    <p class="preview">Food slows absorption, so the peak comes later and lower. Most people burn 0.10 to 0.20 ‰ per hour; coffee, water or a cold shower do not speed it up.</p>
+    <p class="preview">Food changes how fast and how high you peak, not how fast you sober up. Change it if you eat during the session. Most people burn 0.10 to 0.20 ‰ per hour; coffee, water or a cold shower do not speed it up.</p>
     <button class="primary" type="button" data-close>Done</button>
   </div>
 </div>
@@ -371,7 +399,16 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   ];
   var TOP = 4.5;
 
-  var S = { profile: { sex: 'm', kg: 80, food: 'light', rate: 0.15, unit: 'pm', limit: 0.5, set: false }, start: Date.now(), drinks: [] };
+  // half = absorption half-time in minutes, F = share of the alcohol that reaches the blood
+  var FOOD = {
+    empty: { l: 'Empty stomach', half: 8, F: 1, note: 'Nothing for three hours or more. Alcohol passes straight into the gut: fastest rise and highest peak, roughly half an hour after each drink.' },
+    snack: { l: 'Snack', half: 11, F: 0.96, note: 'Crisps, nuts, fruit, or a meal that was a few hours ago. Slows things only a little.' },
+    light: { l: 'Light meal', half: 15, F: 0.92, note: 'Salad, soup, sushi or a small plate in the last two hours. The peak comes later and somewhat lower.' },
+    full:  { l: 'Full meal', half: 22, F: 0.88, note: 'A proper mixed meal such as pasta, a rice dish, or meat with sides in the last two hours. The peak is clearly delayed and lower.' },
+    heavy: { l: 'Heavy, fatty meal', half: 30, F: 0.85, note: 'A large meal rich in fat and protein: burger, pizza, steak, cheese. Slowest absorption and lowest peak, but the rise goes on for longer after your last drink.' }
+  };
+
+  var S = { profile: { sex: 'm', kg: 80, food: 'light', rate: 0.15, unit: 'pm', limit: 0.5, warn: 0.8, set: false }, start: Date.now(), drinks: [] };
   var P = S.profile, sim = null, undo = null, toastTimer = 0;
 
   function load() {
@@ -411,10 +448,10 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   }
 
   // Widmark with first-order absorption and constant elimination, one-minute steps.
-  function simulate() {
-    var r = rFactor(), W = P.kg, half = { empty: 9, light: 15, full: 25 }[P.food] || 15;
-    var k = 1 - Math.pow(0.5, 1 / half), elim = P.rate * r * W / 60;
-    var ds = S.drinks.map(function (d) { return { t: d.t, g: grams(d) }; }).sort(function (a, b) { return a.t - b.t; });
+  function run(list) {
+    var r = rFactor(), W = P.kg, food = FOOD[P.food] || FOOD.light;
+    var k = 1 - Math.pow(0.5, 1 / food.half), elim = P.rate * r * W / 60;
+    var ds = list.map(function (d) { return { t: d.t, g: grams(d) * food.F }; }).sort(function (a, b) { return a.t - b.t; });
     var first = ds.length ? Math.min(S.start, ds[0].t) : S.start;
     var t0 = Math.floor(first / MIN) * MIN, last = ds.length ? ds[ds.length - 1].t : t0;
     var A = 0, pts = [0], peak = 0, peakT = t0;
@@ -432,8 +469,15 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       if (b > peak) { peak = b; peakT = t; }
       if (!pending && A <= 0 && t > last) break;
     }
-    sim = { t0: t0, pts: pts, end: t0 + (pts.length - 1) * MIN, peak: peak, peakT: peakT };
+    return { t0: t0, pts: pts, end: t0 + (pts.length - 1) * MIN, peak: peak, peakT: peakT };
   }
+  // highest value still to come
+  function peakAfter(s, now) {
+    var b = { v: 0, t: now };
+    for (var a = Math.max(0, Math.ceil((now - s.t0) / MIN)); a < s.pts.length; a++) if (s.pts[a] > b.v) b = { v: s.pts[a], t: s.t0 + a * MIN };
+    return b;
+  }
+  function lastDrink() { return S.drinks.reduce(function (a, b) { return b.t > a.t ? b : a; }); }
   function bacAt(t) {
     var x = (t - sim.t0) / MIN, i = Math.floor(x);
     if (x < 0 || i >= sim.pts.length - 1) return 0;
@@ -476,6 +520,19 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       lim = idx < 0 ? 'Stays under' : tl > now ? '≈ ' + clock(tl) : 'Yes';
     } else if (P.limit === 0 && has) lim = sim.end > now ? 'Zero tolerance' : 'Yes';
     $('stLimit').innerHTML = lim;
+
+    var pk = peakAfter(sim, now), fl = levelOf(pk.v), rising = pk.v > v + 0.03, wl = fmt(P.warn) + ' ' + unit();
+    $('ahead').hidden = !rising;
+    if (rising) $('ahead').innerHTML = 'Your last drinks are still being absorbed. Without another sip you reach about <b>' + fmt(pk.v) + ' ' + unit() +
+      '</b> around ' + hhmm(pk.t) + (fl > li ? ', which is “' + LEVELS[fl].name + '”.' : '.');
+    var al = '';
+    if (v >= P.warn) al = 'You are over your ' + wl + ' warning line. Stop drinking and switch to water.';
+    else if (pk.v >= P.warn) al = 'Stop here. What you already drank takes you to about ' + fmt(pk.v) + ' ' + unit() + ' around ' + hhmm(pk.t) + ', over your ' + wl + ' warning line.';
+    else if (has) {
+      var ld = lastDrink(), nx = peakAfter(run(S.drinks.concat([{ ml: ld.ml, abv: ld.abv, t: now }])), now);
+      if (nx.v >= P.warn) al = 'Careful: one more ' + ld.name.toLowerCase() + ' now would take you to about ' + fmt(nx.v) + ' ' + unit() + ', over your ' + wl + ' warning line. Wait, or make the next one water.';
+    }
+    $('alert').textContent = al; $('alert').hidden = !al;
 
     var rows = document.querySelectorAll('#levels li');
     for (var q = 0; q < rows.length; q++) rows[q].classList.toggle('now', q === li);
@@ -555,9 +612,36 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
     }).join('');
   }
 
-  function tick() { var now = Date.now(); renderHero(now); renderChart(now); }
+  var wiType = null, wiPace = 30;
+  function wiSpec() {
+    var k = wiType || (S.drinks.length ? lastDrink().type : 'beer'), T = TYPES[k], m = null;
+    S.drinks.forEach(function (d) { if (d.type === k && (!m || d.t > m.t)) m = d; });
+    return { type: k, name: m ? m.name : T.name, ml: m ? m.ml : T.ml, abv: m ? m.abv : T.abv };
+  }
+  function renderWhatIf(now) {
+    var sp = wiSpec(), extra = [], rows = '';
+    $('wiType').innerHTML = Object.keys(TYPES).map(function (k) {
+      return '<button type="button" data-v="' + k + '" aria-pressed="' + (k === sp.type) + '">' + TYPES[k].name + '</button>';
+    }).join('');
+    $('wiPace').innerHTML = [15, 30, 45, 60].map(function (m) {
+      return '<button type="button" data-v="' + m + '" aria-pressed="' + (m === wiPace) + '">' + m + ' min</button>';
+    }).join('');
+    for (var n = 1; n <= 5; n++) {
+      extra.push({ ml: sp.ml, abv: sp.abv, t: now + (n - 1) * wiPace * MIN });
+      var r = run(S.drinks.concat(extra)), pk = peakAfter(r, now), l = levelOf(pk.v);
+      rows += '<li style="--lvl:var(--l' + l + ')"><span class="n">+' + n + '</span><div><b>' + fmt(pk.v) + ' ' + unit() + '</b><span class="tag">' + LEVELS[l].name +
+        '</span><p>Peak around ' + clock(pk.t) + ' · back to zero ≈ ' + clock(r.end) + (pk.v >= P.warn ? ' · <em>over your warning line</em>' : '') + '</p></div></li>';
+    }
+    $('wi').innerHTML = rows;
+    $('wiNote').textContent = 'Peak you would reach with 1 to 5 more: ' + sp.name.toLowerCase() + ', ' + sp.ml + ' ml at ' + sp.abv +
+      ' %, the first one now and then one every ' + wiPace + ' min, on top of what you logged.';
+  }
+  $('wiType').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { wiType = b.dataset.v; tick(); } });
+  $('wiPace').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { wiPace = +b.dataset.v; tick(); } });
+
+  function tick() { var now = Date.now(); renderHero(now); renderChart(now); renderWhatIf(now); }
   function renderAll() {
-    simulate(); renderLog(); renderLevels();
+    sim = run(S.drinks); renderLog(); renderLevels();
     $('startTime').value = hhmm(Math.min(S.start, S.drinks.length ? sim.t0 + MIN : S.start));
     $('profileNotice').hidden = !!P.set;
     tick();
@@ -590,8 +674,12 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
     $('addDrink').disabled = !ok;
     if (ok) {
       var g = ml * abv / 100 * ETHANOL;
-      $('preview').textContent = '≈ ' + g.toFixed(0) + ' g pure alcohol, adds up to ' + fmt(g / (rFactor() * P.kg)) + ' ' + unit() + ' for you.';
-    } else $('preview').textContent = 'Enter a volume in ml and a strength in %.';
+      var now = Date.now(), t = draft.t === null ? now - draft.when * MIN : draft.t;
+      var pk = peakAfter(run(S.drinks.concat([{ ml: ml, abv: abv, t: Math.min(t, now) }])), now), over = pk.v >= P.warn;
+      $('preview').textContent = '≈ ' + g.toFixed(0) + ' g pure alcohol. With this drink you peak at about ' + fmt(pk.v) + ' ' + unit() + ' (' +
+        LEVELS[levelOf(pk.v)].name + ') around ' + hhmm(pk.t) + '.' + (over ? ' That is over your warning line.' : '');
+      $('preview').classList.toggle('over', over);
+    } else { $('preview').textContent = 'Enter a volume in ml and a strength in %.'; $('preview').classList.remove('over'); }
   }
   $('tiles').innerHTML = Object.keys(TYPES).map(function (k) {
     var T = TYPES[k];
@@ -636,7 +724,9 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   }
   function renderProfile() {
     seg('segSex', 'sex', [['m', 'Male'], ['f', 'Female']]);
-    seg('segFood', 'food', [['empty', 'Empty'], ['light', 'Light meal'], ['full', 'Full meal']]);
+    seg('segFood', 'food', Object.keys(FOOD).map(function (k) { return [k, FOOD[k].l]; }));
+    $('foodNote').textContent = FOOD[P.food].note;
+    seg('segWarn', 'warn', [[0.5, fmt(0.5)], [0.8, fmt(0.8)], [1, fmt(1)], [1.5, fmt(1.5)]]);
     seg('segRate', 'rate', [[0.1, 'Slow 0.10'], [0.15, 'Average 0.15'], [0.2, 'Fast 0.20']]);
     seg('segUnit', 'unit', [['pm', '‰ per mille'], ['pc', '% BAC']]);
     seg('segLimit', 'limit', [[0, 'Zero'], [0.2, fmt(0.2)], [0.5, fmt(0.5)], [0.8, fmt(0.8)]]);
@@ -691,7 +781,8 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
 
   /* ---------- boot ---------- */
   load(); P = S.profile;
-  simulate();
+  if (!FOOD[P.food]) P.food = 'light';
+  sim = run(S.drinks);
   var stale = Date.now() - 6 * HOUR;
   if (S.drinks.length ? sim.end < stale : S.start < stale) { S.drinks = []; S.start = Date.now(); save(); }
   renderAll();

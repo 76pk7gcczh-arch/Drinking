@@ -222,6 +222,16 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
 }
 .primary:disabled { opacity: .4; }
 
+.water-btn {
+  width: 100%; margin-top: 8px; min-height: 54px; padding: 8px 14px; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  display: flex; align-items: center; gap: 12px;
+}
+.water-btn:active { background: var(--surface-2); }
+.water-btn svg { width: 28px; height: 28px; flex: none; color: var(--l0); }
+.water-btn b { font-weight: 600; font-size: 15px; display: block; }
+.water-btn span { font-size: 12px; color: var(--muted); }
+.sub.nudge { color: var(--accent); font-weight: 600; }
 .alert {
   border-radius: 14px; padding: 12px 14px; font-weight: 600; font-size: 15px;
   background: color-mix(in srgb, var(--l5) 16%, var(--surface)); border: 1px solid var(--l5);
@@ -287,6 +297,11 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   <section>
     <h2>Add a drink</h2>
     <div class="tiles" id="tiles"></div>
+    <button class="water-btn" id="addWater" type="button">
+      <svg class="ic" viewBox="0 0 28 28"><path d="M14 4c4 5 7 8.500 7 12a7 7 0 0 1-14 0c0-3.500 3-7 7-12z"/></svg>
+      <span><b>Glass of water</b><span id="waterCount">250 ml · one tap, logged for now</span></span>
+    </button>
+    <p class="sub" id="waterNote"></p>
   </section>
 
   <section class="stack">
@@ -303,7 +318,7 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       <svg id="chart" viewBox="0 0 360 200" role="img" aria-label="Blood alcohol over time"></svg>
       <p class="empty" id="chartEmpty">Add your first drink and the curve appears here, with a forecast of when you are back to zero.</p>
     </div>
-    <p class="sub" id="chartNote" hidden>Dashed line: forecast if you stop drinking now. The coloured edge matches the levels below.</p>
+    <p class="sub" id="chartNote" hidden>Dashed line: forecast if you stop drinking now. Ticks mark drinks, dots mark water. The coloured edge matches the levels below.</p>
   </section>
 
   <section>
@@ -398,6 +413,8 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
     { lo: 3.5,  name: 'Life-threatening', fx: 'Unconsciousness, slow or irregular breathing, coma.', warn: 'This is alcohol poisoning. Call emergency services now.' }
   ];
   var TOP = 4.5;
+  // a glass of water from 30 min before to 15 min after a drink stretches that drink's absorption by 30 %
+  var WATER_BEFORE = 30 * MIN, WATER_AFTER = 15 * MIN, WATER_SLOW = 1.3, WATER_ML = 250;
 
   // half = absorption half-time in minutes, F = share of the alcohol that reaches the blood
   var FOOD = {
@@ -408,7 +425,7 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
     heavy: { l: 'Heavy, fatty meal', half: 30, F: 0.85, note: 'A large meal rich in fat and protein: burger, pizza, steak, cheese. Slowest absorption and lowest peak, but the rise goes on for longer after your last drink.' }
   };
 
-  var S = { profile: { sex: 'm', kg: 80, food: 'light', rate: 0.15, unit: 'pm', limit: 0.5, warn: 0.8, set: false }, start: Date.now(), drinks: [] };
+  var S = { profile: { sex: 'm', kg: 80, food: 'light', rate: 0.15, unit: 'pm', limit: 0.5, warn: 0.8, set: false }, start: Date.now(), drinks: [], water: [] };
   var P = S.profile, sim = null, undo = null, toastTimer = 0;
 
   function load() {
@@ -418,6 +435,7 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
         for (var k in S.profile) if (d.profile[k] !== undefined) S.profile[k] = d.profile[k];
         if (typeof d.start === 'number') S.start = d.start;
         if (Array.isArray(d.drinks)) S.drinks = d.drinks.filter(function (x) { return x && x.ml > 0 && x.abv >= 0 && x.t; });
+        if (Array.isArray(d.water)) S.water = d.water.filter(function (x) { return x && x.t; });
       }
     } catch (e) {}
   }
@@ -450,8 +468,11 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   // Widmark with first-order absorption and constant elimination, one-minute steps.
   function run(list) {
     var r = rFactor(), W = P.kg, food = FOOD[P.food] || FOOD.light;
-    var k = 1 - Math.pow(0.5, 1 / food.half), elim = P.rate * r * W / 60;
-    var ds = list.map(function (d) { return { t: d.t, g: grams(d) * food.F }; }).sort(function (a, b) { return a.t - b.t; });
+    var elim = P.rate * r * W / 60;
+    var ds = list.map(function (d) {
+      var wet = S.water.some(function (w) { return w.t >= d.t - WATER_BEFORE && w.t <= d.t + WATER_AFTER; });
+      return { t: d.t, g: grams(d) * food.F, k: 1 - Math.pow(0.5, 1 / (food.half * (wet ? WATER_SLOW : 1))) };
+    }).sort(function (a, b) { return a.t - b.t; });
     var first = ds.length ? Math.min(S.start, ds[0].t) : S.start;
     var t0 = Math.floor(first / MIN) * MIN, last = ds.length ? ds[ds.length - 1].t : t0;
     var A = 0, pts = [0], peak = 0, peakT = t0;
@@ -460,7 +481,7 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       for (var i = 0; i < ds.length; i++) {
         var d = ds[i];
         if (d.g <= 0) continue;
-        if (d.t < t) { var a = d.g < 0.02 ? d.g : d.g * k; d.g -= a; A += a; }
+        if (d.t < t) { var a = d.g < 0.02 ? d.g : d.g * d.k; d.g -= a; A += a; }
         if (d.g > 0) pending = true;
       }
       A = Math.max(0, A - elim);
@@ -583,6 +604,9 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       o += '<path d="M' + past.join('L') + '" fill="none" stroke="var(--accent)" stroke-width="2.200" stroke-linejoin="round"/>';
     }
     if (fut.length > 1) o += '<path d="M' + fut.join('L') + '" fill="none" stroke="var(--accent)" stroke-width="1.800" stroke-dasharray="4 4" stroke-opacity=".75"/>';
+    for (var w = 0; w < S.water.length; w++) {
+      if (S.water[w].t >= tA) o += '<circle cx="' + f(X(S.water[w].t)) + '" cy="' + (H - B - 3) + '" r="2.500" fill="var(--l0)"/>';
+    }
     for (var q = 0; q < S.drinks.length; q++) {
       var dx = f(X(S.drinks[q].t));
       o += '<path d="M' + dx + ' ' + (H - B) + 'v-5" stroke="var(--fg)" stroke-width="1.500" fill="none"/>';
@@ -595,11 +619,12 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   }
 
   function renderLog() {
-    var ds = S.drinks.slice().sort(function (a, b) { return b.t - a.t; });
+    var ds = S.drinks.concat(S.water.map(function (w) { return { id: w.id, t: w.t, name: 'Water', ml: w.ml, w: 1 }; }))
+      .sort(function (a, b) { return b.t - a.t; });
     $('logEmpty').hidden = ds.length > 0;
     $('log').innerHTML = ds.map(function (d) {
-      return '<li><time>' + hhmm(d.t) + '</time><div class="what"><b>' + d.name + '</b><span>' + d.ml + ' ml · ' + d.abv + ' % · ' +
-        grams(d).toFixed(0) + ' g alcohol</span></div><button type="button" data-del="' + d.id + '" aria-label="Remove ' + d.name + ' at ' + hhmm(d.t) +
+      return '<li><time>' + hhmm(d.t) + '</time><div class="what"><b>' + d.name + '</b><span>' + (d.w ? d.ml + ' ml' : d.ml + ' ml · ' + d.abv + ' % · ' +
+        grams(d).toFixed(0) + ' g alcohol') + '</span></div><button type="button" data-del="' + d.id + '" aria-label="Remove ' + d.name + ' at ' + hhmm(d.t) +
         '"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></li>';
     }).join('');
   }
@@ -639,7 +664,22 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   $('wiType').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { wiType = b.dataset.v; tick(); } });
   $('wiPace').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) { wiPace = +b.dataset.v; tick(); } });
 
-  function tick() { var now = Date.now(); renderHero(now); renderChart(now); renderWhatIf(now); }
+  function renderWater() {
+    var n = S.water.length, lastW = n ? Math.max.apply(null, S.water.map(function (w) { return w.t; })) : 0;
+    var since = S.drinks.filter(function (d) { return d.t > lastW; }).length;
+    $('waterCount').textContent = n ? n + (n === 1 ? ' glass' : ' glasses') + ' this session · ' + (n * WATER_ML / 1000).toFixed(2).replace(/0$/, '') + ' l' : WATER_ML + ' ml · one tap, logged for now';
+    var nudge = since >= 2;
+    $('waterNote').classList.toggle('nudge', nudge);
+    $('waterNote').textContent = nudge ? since + ' drinks since your last water. Have a glass before the next one.'
+      : 'Water with a drink (up to 30 min before, 15 min after) dilutes it, so that drink is absorbed a little slower and peaks slightly lower. It does not remove alcohol or speed up burn-off.';
+  }
+  $('addWater').addEventListener('click', function () {
+    var w = { id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), ml: WATER_ML };
+    S.water.push(w); save(); renderAll();
+    toast('Water logged', function () { S.water = S.water.filter(function (x) { return x.id !== w.id; }); save(); renderAll(); });
+  });
+
+  function tick() { var now = Date.now(); renderHero(now); renderChart(now); renderWhatIf(now); renderWater(); }
   function renderAll() {
     sim = run(S.drinks); renderLog(); renderLevels();
     $('startTime').value = hhmm(Math.min(S.start, S.drinks.length ? sim.t0 + MIN : S.start));
@@ -760,10 +800,10 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   $('toastUndo').addEventListener('click', function () { if (undo) undo(); $('toast').hidden = true; undo = null; });
   $('log').addEventListener('click', function (e) {
     var b = e.target.closest('[data-del]'); if (!b) return;
-    var prev = S.drinks.slice();
-    S.drinks = S.drinks.filter(function (d) { return d.id !== b.dataset.del; });
+    var prev = S.drinks.slice(), prevW = S.water.slice(), keep = function (d) { return d.id !== b.dataset.del; };
+    S.drinks = S.drinks.filter(keep); S.water = S.water.filter(keep);
     save(); renderAll();
-    toast('Drink removed', function () { S.drinks = prev; save(); renderAll(); });
+    toast('Removed', function () { S.drinks = prev; S.water = prevW; save(); renderAll(); });
   });
   var armTimer = 0;
   $('newSession').addEventListener('click', function () {
@@ -773,9 +813,9 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
       armTimer = setTimeout(disarm, 4000); return;
     }
     clearTimeout(armTimer); disarm();
-    var prev = { drinks: S.drinks, start: S.start };
-    S.drinks = []; S.start = Date.now(); save(); renderAll();
-    if (prev.drinks.length) toast('New session started', function () { S.drinks = prev.drinks; S.start = prev.start; save(); renderAll(); });
+    var prev = { drinks: S.drinks, water: S.water, start: S.start };
+    S.drinks = []; S.water = []; S.start = Date.now(); save(); renderAll();
+    if (prev.drinks.length) toast('New session started', function () { S.drinks = prev.drinks; S.water = prev.water; S.start = prev.start; save(); renderAll(); });
     function disarm() { btn.classList.remove('armed'); btn.textContent = 'Start a new session'; }
   });
 
@@ -784,7 +824,7 @@ svg.ic { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: ro
   if (!FOOD[P.food]) P.food = 'light';
   sim = run(S.drinks);
   var stale = Date.now() - 6 * HOUR;
-  if (S.drinks.length ? sim.end < stale : S.start < stale) { S.drinks = []; S.start = Date.now(); save(); }
+  if (S.drinks.length ? sim.end < stale : S.start < stale) { S.drinks = []; S.water = []; S.start = Date.now(); save(); }
   renderAll();
   setInterval(tick, 15000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
